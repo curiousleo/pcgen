@@ -1,4 +1,6 @@
-{-# LANGUAGE Safe #-}
+{-# LANGUAGE CPP #-}
+{-# LANGUAGE MagicHash #-}
+{-# LANGUAGE UnboxedTuples #-}
 
 -- | This module contains a permuted linear congruential pseudorandom number
 -- generator, as described by M.E. O'Neill (<pcg-random.org>). This version
@@ -16,7 +18,7 @@
 -- step and controls what stream of numbers is generated. The @inc@ is always
 -- bitwise OR'd with 1 during computations, so there are only 2^63 distinct
 -- number streams (eg: @inc@ 2 and 3 are the same number stream). The @state@
--- value eventually returns to it's initial value after 2^64 uses and the whole
+-- value eventually returns to its initial value after 2^64 uses and the whole
 -- sequence loops around.
 module Data.PCGen (
     PCGen(PCGen),
@@ -31,8 +33,11 @@ import Data.Int (Int32)
 import Foreign.Storable
 import Foreign.Ptr
 import Control.Exception
+import GHC.Exts ((+#), (*#), Addr#, ByteArray#, Int(I#), Int#, MutableByteArray#, State#)
 -- random
 import System.Random
+-- primitive
+import Data.Primitive.Types (Prim(..), defaultSetByteArray#, defaultSetOffAddr#)
 
 -- | The @PCGen@ data type. You can use the constructor yourself with two
 -- @Word64@ values, but with human picked seeds the first result will generally
@@ -66,23 +71,7 @@ stepGen (PCGen state inc) = let
     in (out, PCGen newState inc)
 
 instance RandomGen PCGen where
-    -- 'next' specifies that the output is an Int value, so we convert the
-    -- Word32 bits into the Int32 range before converting that into an Int and
-    -- returning. If we convert the Word32 directly to Int and Int is Int64,
-    -- then our outputs won't match up properly with what we declare with the
-    -- genRange function. Of course, all this number conversion stuff between
-    -- Integral types is pretty much noop nonsense once we compile, but Haskell
-    -- likes to be very precise with types after all.
-    next gen = let
-        (outWord, nextGen) = stepGen gen
-        outInt = fromIntegral (fromIntegral outWord :: Int32) :: Int
-        in (outInt, nextGen)
-
-    -- Similar to the above, the range of a PCGen is 32-bits of output per step,
-    -- and so we use the bounds of Int32, but we have to convert that into Int
-    -- to conform with the spec of the typeclass.
-    genRange _ = (fromIntegral (minBound :: Int32),
-                    fromIntegral (maxBound :: Int32))
+    genWord32 = stepGen
 
     -- The only real spec here is that the two result generators be dissimilar
     -- from each other and also from the input generator. So we just do some
@@ -100,16 +89,6 @@ instance RandomGen PCGen where
         outB = PCGen stateB (incB .|. 1)
         in (outA, outB)
         -- TODO: This could probably be faster while still conforming to spec.
-
-instance Random PCGen where
-    -- produces a random PCGen value.
-    random gen = let
-        (x,newGen) = random gen
-        in (mkPCGen (x::Word),newGen)
-    
-    -- produces a random PCGen value but ignores the range input since it would
-    -- be nonsensical to try and use them as the "bounds" of anything.
-    randomR _ gen = random gen
 
 instance Storable PCGen where
     sizeOf _ = sizeOf (undefined :: Word64) * 2
@@ -131,3 +110,102 @@ instance Storable PCGen where
                 poke word64Ptr s
                 poke (plusPtr word64Ptr offset) i
             else error "The Ptr is not correctly aligned"
+
+instance Prim PCGen where
+  sizeOf#         = sizeOf128#
+  alignment#      = alignment128#
+  indexByteArray# = indexByteArray128#
+  readByteArray#  = readByteArray128#
+  writeByteArray# = writeByteArray128#
+  setByteArray#   = setByteArray128#
+  indexOffAddr#   = indexOffAddr128#
+  readOffAddr#    = readOffAddr128#
+  writeOffAddr#   = writeOffAddr128#
+  setOffAddr#     = setOffAddr128#
+  {-# INLINE sizeOf# #-}
+  {-# INLINE alignment# #-}
+  {-# INLINE indexByteArray# #-}
+  {-# INLINE readByteArray# #-}
+  {-# INLINE writeByteArray# #-}
+  {-# INLINE setByteArray# #-}
+  {-# INLINE indexOffAddr# #-}
+  {-# INLINE readOffAddr# #-}
+  {-# INLINE writeOffAddr# #-}
+  {-# INLINE setOffAddr# #-}
+
+{-# INLINE sizeOf128# #-}
+sizeOf128# :: PCGen -> Int#
+sizeOf128# _ = 2# *# sizeOf# (undefined :: Word64)
+
+{-# INLINE alignment128# #-}
+alignment128# :: PCGen -> Int#
+alignment128# _ = 2# *# alignment# (undefined :: Word64)
+
+{-# INLINE indexByteArray128# #-}
+indexByteArray128# :: ByteArray# -> Int# -> PCGen
+indexByteArray128# arr# i# =
+  let i2# = 2# *# i#
+      x = indexByteArray# arr# (i2# +# unInt index1)
+      y = indexByteArray# arr# (i2# +# unInt index0)
+  in PCGen x y
+
+{-# INLINE readByteArray128# #-}
+readByteArray128# :: MutableByteArray# s -> Int# -> State# s -> (# State# s, PCGen #)
+readByteArray128# arr# i# =
+  \s0 -> case readByteArray# arr# (i2# +# unInt index1) s0 of
+    (# s1, x #) -> case readByteArray# arr# (i2# +# unInt index0) s1 of
+      (# s2, y #) -> (# s2, PCGen x y #)
+  where i2# = 2# *# i#
+
+{-# INLINE writeByteArray128# #-}
+writeByteArray128# :: MutableByteArray# s -> Int# -> PCGen -> State# s -> State# s
+writeByteArray128# arr# i# (PCGen a b) =
+  \s0 -> case writeByteArray# arr# (i2# +# unInt index1) a s0 of
+    s1 -> case writeByteArray# arr# (i2# +# unInt index0) b s1 of
+      s2 -> s2
+  where i2# = 2# *# i#
+
+{-# INLINE setByteArray128# #-}
+setByteArray128# :: MutableByteArray# s -> Int# -> Int# -> PCGen -> State# s -> State# s
+setByteArray128# = defaultSetByteArray#
+
+{-# INLINE indexOffAddr128# #-}
+indexOffAddr128# :: Addr# -> Int# -> PCGen
+indexOffAddr128# addr# i# =
+  let i2# = 2# *# i#
+      x = indexOffAddr# addr# (i2# +# unInt index1)
+      y = indexOffAddr# addr# (i2# +# unInt index0)
+  in PCGen x y
+
+{-# INLINE readOffAddr128# #-}
+readOffAddr128# :: Addr# -> Int# -> State# s -> (# State# s, PCGen #)
+readOffAddr128# addr# i# =
+  \s0 -> case readOffAddr# addr# (i2# +# unInt index1) s0 of
+    (# s1, x #) -> case readOffAddr# addr# (i2# +# unInt index0) s1 of
+      (# s2, y #) -> (# s2, PCGen x y #)
+  where i2# = 2# *# i#
+
+{-# INLINE writeOffAddr128# #-}
+writeOffAddr128# :: Addr# -> Int# -> PCGen -> State# s -> State# s
+writeOffAddr128# addr# i# (PCGen a b) =
+  \s0 -> case writeOffAddr# addr# (i2# +# unInt index1) a s0 of
+    s1 -> case writeOffAddr# addr# (i2# +# unInt index0) b s1 of
+      s2 -> s2
+  where i2# = 2# *# i#
+
+{-# INLINE setOffAddr128# #-}
+setOffAddr128# :: Addr# -> Int# -> Int# -> PCGen -> State# s -> State# s
+setOffAddr128# = defaultSetOffAddr#
+
+unInt :: Int -> Int#
+unInt (I# i#) = i#
+
+-- Use these indices to get the peek/poke ordering endian correct.
+index0, index1 :: Int
+#if WORDS_BIGENDIAN
+index0 = 1
+index1 = 0
+#else
+index0 = 0
+index1 = 1
+#endif
