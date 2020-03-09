@@ -90,6 +90,11 @@ instance RandomGen PCGen where
         in (outA, outB)
         -- TODO: This could probably be faster while still conforming to spec.
 
+instance Uniform PCGen where
+    uniform gen = do
+        x <- uniform gen
+        return $ mkPCGen (x :: Word64)
+
 instance Storable PCGen where
     sizeOf _ = sizeOf (undefined :: Word64) * 2
     alignment _ = alignment (undefined :: Word64)
