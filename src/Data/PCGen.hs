@@ -30,7 +30,6 @@ module Data.PCGen (
 import Data.Bits
 import Data.Word (Word32,Word64)
 import Data.Int (Int32)
-import Foreign.Storable
 import Foreign.Ptr
 import Control.Exception
 import GHC.Exts ((+#), (*#), Addr#, ByteArray#, Int(I#), Int#, MutableByteArray#, State#)
@@ -94,27 +93,6 @@ instance Uniform PCGen where
     uniform gen = do
         x <- uniform gen
         return $ mkPCGen (x :: Word64)
-
-instance Storable PCGen where
-    sizeOf _ = sizeOf (undefined :: Word64) * 2
-    alignment _ = alignment (undefined :: Word64)
-    peek ptr = do
-        if alignPtr ptr (alignment (undefined :: PCGen)) == ptr
-            then do
-                let word64Ptr = castPtr ptr
-                    offset = sizeOf (undefined :: Word64)
-                s <- peek word64Ptr :: IO Word64
-                i <- peek (plusPtr word64Ptr offset) :: IO Word64
-                pure $ PCGen s i
-            else error "The Ptr is not correctly aligned"
-    poke ptr (PCGen s i) = do
-        if alignPtr ptr (alignment (undefined :: PCGen)) == ptr
-            then do
-                let word64Ptr = castPtr ptr
-                    offset = sizeOf (undefined :: Word64)
-                poke word64Ptr s
-                poke (plusPtr word64Ptr offset) i
-            else error "The Ptr is not correctly aligned"
 
 instance Prim PCGen where
   sizeOf#         = sizeOf128#
